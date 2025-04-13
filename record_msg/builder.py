@@ -77,7 +77,7 @@ class LocalizationBuilder(Builder):
   def __init__(self) -> None:
     super().__init__()
 
-  def build(self, translation, rotation, heading, t):
+  def build(self, translation, rotation, heading, measurement_time, t = None):
     pb_localization = localization_pb2.LocalizationEstimate()
     if t is None:
       t = time.time()
@@ -99,7 +99,7 @@ class LocalizationBuilder(Builder):
     # pb_localization.pose.linear_acceleration
     # pb_localization.pose.angular_velocity
 
-    pb_localization.measurement_time = t
+    pb_localization.measurement_time = measurement_time
     self._sequence_num += 1
     return pb_localization
 
@@ -107,27 +107,29 @@ class IMUBuilder(Builder):
   def __init__(self) -> None:
     super().__init__()
 
-  def build(self, linear_acceleration, angular_velocity, t, measurement_time = None, measurement_span = None):
+  def build(self, ax, ay, az, wx, wy, wz,
+            measurement_time, measurement_span = None,
+            measurement_time_is_unix_time = True, t = None):
     pb_imu = imu_pb2.Imu()
     if t is None:
       t = time.time()
     self._build_header(pb_imu.header, t=t)
 
-    if measurement_time is not None:
-      pb_imu.measurement_time = measurement_time
+    if measurement_time_is_unix_time:
+      pb_imu.measurement_time = Unix2Gps(measurement_time)
     else:
-      pb_imu.measurement_time = Unix2Gps(t)
+      pb_imu.measurement_time = measurement_time
 
     if measurement_span is not None:
       pb_imu.measurement_span = measurement_span
 
-    pb_imu.linear_acceleration.x = linear_acceleration[0]
-    pb_imu.linear_acceleration.y = linear_acceleration[1]
-    pb_imu.linear_acceleration.z = linear_acceleration[2]
+    pb_imu.linear_acceleration.x = ax
+    pb_imu.linear_acceleration.y = ay
+    pb_imu.linear_acceleration.z = az
 
-    pb_imu.angular_velocity.x = angular_velocity[0]
-    pb_imu.angular_velocity.y = angular_velocity[1]
-    pb_imu.angular_velocity.z = angular_velocity[2]
+    pb_imu.angular_velocity.x = wx
+    pb_imu.angular_velocity.y = wy
+    pb_imu.angular_velocity.z = wz
 
     self._sequence_num += 1
     return pb_imu
@@ -136,20 +138,56 @@ class GnssBestPoseBuilder(Builder):
   def __init__(self) -> None:
     super().__init__()
 
-  def build(self, latitude, longitude, height_msl, undulation, t, **kwargs):
+  def build(self, measurement_time,
+            latitude, longitude, height_msl, undulation,
+            latitude_std_dev, longitude_std_dev, height_std_dev,
+            sol_status, sol_type,
+            num_sats_tracked, num_sats_in_solution, num_sats_l1, num_sats_multi,
+            datum_id = gnss_best_pose_pb2.DatumId.WGS84,
+            base_station_id = None,
+            differential_age = None, solution_age = None,
+            extended_solution_status = None,
+            galileo_beidou_used_mask = None,
+            gps_glonass_used_mask = None,
+            measurement_time_is_unix_time = True,
+            t = None):
     pb_gnss_best_pose = gnss_best_pose_pb2.GnssBestPose()
     if t is None:
       t = time.time()
     self._build_header(pb_gnss_best_pose.header, t=t)
 
-    pb_gnss_best_pose.measurement_time = Unix2Gps(t) # It will be overridden if provided in kwargs
+    if measurement_time_is_unix_time:
+      pb_gnss_best_pose.measurement_time = Unix2Gps(measurement_time)
+    else:
+      pb_gnss_best_pose.measurement_time = measurement_time
 
     pb_gnss_best_pose.latitude = latitude
     pb_gnss_best_pose.longitude = longitude
     pb_gnss_best_pose.height_msl = height_msl
     pb_gnss_best_pose.undulation = undulation
+    pb_gnss_best_pose.latitude_std_dev = latitude_std_dev
+    pb_gnss_best_pose.longitude_std_dev = longitude_std_dev
+    pb_gnss_best_pose.height_std_dev = height_std_dev
+    pb_gnss_best_pose.sol_status = sol_status
+    pb_gnss_best_pose.sol_type = sol_type
+    pb_gnss_best_pose.num_sats_tracked = num_sats_tracked
+    pb_gnss_best_pose.num_sats_in_solution = num_sats_in_solution
+    pb_gnss_best_pose.num_sats_l1 = num_sats_l1
+    pb_gnss_best_pose.num_sats_multi = num_sats_multi
+    pb_gnss_best_pose.datum_id = datum_id
 
-    json_format.ParseDict(kwargs, pb_gnss_best_pose)
+    if base_station_id is not None:
+      pb_gnss_best_pose.base_station_id = base_station_id
+    if differential_age is not None:
+      pb_gnss_best_pose.differential_age = differential_age
+    if solution_age is not None:
+      pb_gnss_best_pose.solution_age = solution_age
+    if extended_solution_status is not None:
+      pb_gnss_best_pose.extended_solution_status = extended_solution_status
+    if galileo_beidou_used_mask:
+      pb_gnss_best_pose.galileo_beidou_used_mask = galileo_beidou_used_mask
+    if gps_glonass_used_mask:
+      pb_gnss_best_pose.gps_glonass_used_mask = gps_glonass_used_mask
 
     self._sequence_num += 1
     return pb_gnss_best_pose
@@ -167,7 +205,7 @@ class ImageBuilder(Builder):
       print('Unsupported image encoding type: %s.' % encoding)
       return None
 
-  def build(self, file_name, frame_id, encoding, t=None):
+  def build(self, file_name, frame_id, encoding, measurement_time, t=None):
     pb_image = sensor_image_pb2.Image()
     flag = self._to_flag(encoding)
     if flag is None:
@@ -178,7 +216,7 @@ class ImageBuilder(Builder):
 
     self._build_header(pb_image.header, frame_id=frame_id)
     pb_image.frame_id = frame_id
-    pb_image.measurement_time = t
+    pb_image.measurement_time = measurement_time
     pb_image.encoding = encoding
 
     img = cv2.imread(file_name, flag)
@@ -202,7 +240,7 @@ class PointCloudBuilder(Builder):
     super().__init__()
     self._dim = dim
 
-  def build(self, file_name, frame_id, t=None):
+  def build(self, file_name, frame_id, measurement_time, t=None):
     pb_point_cloud = pointcloud_pb2.PointCloud()
 
     if t is None:
@@ -211,7 +249,7 @@ class PointCloudBuilder(Builder):
     self._build_header(pb_point_cloud.header, t=t, frame_id=frame_id)
     pb_point_cloud.frame_id = frame_id
     # pb_point_cloud.is_dense = False
-    pb_point_cloud.measurement_time = t
+    pb_point_cloud.measurement_time = measurement_time
 
     point_cloud = pypcd.point_cloud_from_path(file_name)
 
@@ -226,7 +264,8 @@ class PointCloudBuilder(Builder):
     self._sequence_num += 1
     return pb_point_cloud
 
-  def build_nuscenes(self, file_name, frame_id, t=None, lidar_transform=np.identity(4), intensity_scale_factor=1.0):
+  def build_nuscenes(self, file_name, frame_id, measurement_time, t=None,
+                     lidar_transform=np.identity(4), intensity_scale_factor=1.0):
     pb_point_cloud = pointcloud_pb2.PointCloud()
 
     if t is None:
@@ -235,7 +274,7 @@ class PointCloudBuilder(Builder):
     self._build_header(pb_point_cloud.header, t=t, frame_id=frame_id)
     pb_point_cloud.frame_id = frame_id
     # pb_point_cloud.is_dense = False
-    pb_point_cloud.measurement_time = t
+    pb_point_cloud.measurement_time = measurement_time
 
     # Loads LIDAR data from binary numpy format.
     # Data is stored as (x, y, z, intensity, ring index).
@@ -244,8 +283,7 @@ class PointCloudBuilder(Builder):
     elif file_name.endswith('.txt'):
       scan = np.loadtxt(file_name, dtype=np.float32)
     else:
-      raise "Unsupported file extension."
-    logging.debug(scan[:100])
+      raise RuntimeError("Unsupported file extension.")
 
     points = scan.reshape((-1, self._dim))[:, :4]
     intensities = (points[:, -1] * intensity_scale_factor).astype(np.uint8)
